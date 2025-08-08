@@ -1,17 +1,93 @@
 import os
 import sys
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+from functions.get_files_info import schema_get_files_info, get_files_info
+from functions.get_file_content import schema_get_file_content, get_file_content
+from functions.run_python import schema_run_python_file, run_python_file
+from functions.write_file import schema_write_file, write_file
 
 # Load environment variables
 load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY")
 
-
-from google import genai
-from google.genai import types
-
 # Create an instance of the client 
 client = genai.Client(api_key=api_key)
+
+
+def call_function(function_call_part: types.FunctionCall, verbose=False):
+    if verbose:
+        print(f"Calling function: {function_call_part.name}({function_call_part.args})")
+    else:
+        print(f" - Calling function: {function_call_part.name}")
+    
+    keyword_arguments = function_call_part.args 
+    function_name = function_call_part.name
+
+    keyword_arguments["working_directory"] = "./calculator"
+
+    match function_call_part.name:
+
+        case "get_files_info":
+            result = get_files_info(**keyword_arguments)
+            return types.Content(
+                role="tool",
+                parts=[
+                    types.Part.from_function_response(
+                        name=function_name,
+                        response={"result": result},
+                    )
+                ],
+            )
+        
+        case "get_file_content":
+            result = get_file_content(**keyword_arguments)
+            return types.Content(
+                role="tool",
+                parts=[
+                    types.Part.from_function_response(
+                        name=function_name,
+                        response={"result": result},
+                    )
+                ],
+            )
+        
+        case "run_python_file":
+            result = run_python_file(**keyword_arguments)
+            return types.Content(
+                role="tool",
+                parts=[
+                    types.Part.from_function_response(
+                        name=function_name,
+                        response={"result": result},
+                    )
+                ],
+            )
+        
+        case "write_file":
+            result = write_file(**keyword_arguments)
+            return types.Content(
+                role="tool",
+                parts=[
+                    types.Part.from_function_response(
+                        name=function_name,
+                        response={"result": result},
+                    )
+                ],
+            )
+        
+        case _:
+            return types.Content(
+                role="tool",
+                parts=[
+                    types.Part.from_function_response(
+                        name=function_name,
+                        response={"error": f"Unknown function: {function_name}"},
+                    )
+                ],
+            )
+
 
 def main():
     if len(sys.argv) < 2:
@@ -20,14 +96,45 @@ def main():
     messages = [
         types.Content(role="user", parts=[types.Part(text=sys.argv[1])]),
     ]
-    response = client.models.generate_content(
-        model='gemini-2.0-flash-001', contents=messages
+    available_functions = types.Tool(
+        function_declarations=[
+            schema_get_files_info,
+            schema_get_file_content,
+            schema_run_python_file,
+            schema_write_file
+        ]
     )
-    if len(sys.argv) == 3 and sys.argv[2] == "--verbose":
-        print(f"User prompt: {sys.argv[1]}")
-        print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-        print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
-    print(response.text)
+    system_prompt = """
+    You are a helpful AI coding agent.
+
+    When a user asks a question or makes a request, make a function call plan. You can perform the following operations:
+
+    - List files and directories
+    - Read file contents
+    - Execute Python files with optional arguments
+    - Write or overwrite files
+
+    All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
+    """
+    response = client.models.generate_content(
+        model='gemini-2.0-flash-001',
+        contents=messages,
+        config=types.GenerateContentConfig(
+            tools=[available_functions], system_instruction=system_prompt
+        ),
+    )
+
+    function_calls = response.function_calls
+    for function_call_part in function_calls:
+        if len(sys.argv) == 3 and sys.argv[2] == "--verbose":
+            result = call_function(function_call_part, verbose=True).parts[0].function_response.response
+            print(f"-> {result}")
+        else:
+            result = call_function(function_call_part).parts[0].function_response.response
+        if result == None:
+            raise Exception("FATAL ERROR!!!")
+        
+
 
 
 if __name__ == "__main__":
