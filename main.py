@@ -115,24 +115,37 @@ def main():
     - Write or overwrite files
 
     All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
-    """
-    response = client.models.generate_content(
-        model='gemini-2.0-flash-001',
-        contents=messages,
-        config=types.GenerateContentConfig(
-            tools=[available_functions], system_instruction=system_prompt
-        ),
-    )
 
-    function_calls = response.function_calls
-    for function_call_part in function_calls:
-        if len(sys.argv) == 3 and sys.argv[2] == "--verbose":
-            result = call_function(function_call_part, verbose=True).parts[0].function_response.response
-            print(f"-> {result}")
-        else:
-            result = call_function(function_call_part).parts[0].function_response.response
-        if result == None:
-            raise Exception("FATAL ERROR!!!")
+    You will continue to iterate with added context until you get the answer.
+
+    The result should be elaborated in points.
+    """
+    try:
+        for i in range(20):
+            response = client.models.generate_content(
+                model='gemini-2.0-flash-001',
+                contents=messages,
+                config=types.GenerateContentConfig(
+                    tools=[available_functions], 
+                    system_instruction=system_prompt
+                ),
+            )
+            
+            if not response.function_calls and response.text:
+                print(response.text)
+                break
+            
+            # Add the assistant's response to messages
+            for candidate in response.candidates:
+                messages.append(candidate.content)
+
+            for function_call_part in response.function_calls:
+                function_result = call_function(function_call_part, verbose=(len(sys.argv) == 3 and sys.argv[2] == "--verbose"))
+                messages.append(function_result)
+
+                
+    except Exception as e:
+        print(f"Error: {e}")
         
 
 
